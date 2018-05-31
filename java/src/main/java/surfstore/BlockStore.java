@@ -12,7 +12,10 @@ import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
+import sun.java2d.pipe.SpanShapeRenderer;
 import surfstore.SurfStoreBasic.Empty;
+import surfstore.SurfStoreBasic.SimpleAnswer;
+import surfstore.SurfStoreBasic.Block;
 
 
 public final class BlockStore {
@@ -94,5 +97,30 @@ public final class BlockStore {
         }
 
         // TODO: Implement the other RPCs!
+        @Override
+        public void storeBlock(surfstore.SurfStoreBasic.Block request,
+                               io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.Empty> responseObserver) {
+
+            Empty response = Empty.newBuilder().build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        }
+
+        @Override
+        public void getBlock(surfstore.SurfStoreBasic.Block request,
+                             io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.Block> responseObserver) {
+
+            Block response = Block.newBuilder().build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        }
+
+        @Override
+        public void hasBlock(surfstore.SurfStoreBasic.Block request,
+                             io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.SimpleAnswer> responseObserver) {
+            SimpleAnswer response = SimpleAnswer.newBuilder().setAnswer(false).build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        }
     }
 }

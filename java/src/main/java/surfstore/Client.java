@@ -1,16 +1,19 @@
 package surfstore;
 
 import java.io.File;
+import java.io.UnsupportedEncodingException;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import com.google.protobuf.ByteString;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
-import surfstore.SurfStoreBasic.Empty;
+import surfstore.SurfStoreBasic.*;
+import surfstore.SurfStoreBasic.Block.Builder;
 
 
 public final class Client {
@@ -40,6 +43,19 @@ public final class Client {
         metadataChannel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
         blockChannel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
     }
+
+    private static Block stringToBlock(String s) {
+        Builder builder = Block.newBuilder();
+        try {
+            builder.setData(ByteString.copyFrom(s, "UTF-8"));
+        } catch (UnsupportedEncodingException e){
+            throw new RuntimeException(e);
+        }
+
+        builder.setHash(HashUtils.sha256(s));
+
+        return builder.build();
+    }
     
 	private void go() {
 		metadataStub.ping(Empty.newBuilder().build());
@@ -49,6 +65,7 @@ public final class Client {
         logger.info("Successfully pinged the Blockstore server");
         
         // TODO: Implement your client here
+        Block b1 =
 	}
 
 	/*
