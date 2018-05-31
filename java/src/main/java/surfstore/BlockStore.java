@@ -2,9 +2,12 @@ package surfstore;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.logging.Logger;
 
+import com.google.protobuf.ByteString;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
@@ -12,10 +15,9 @@ import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
-import sun.java2d.pipe.SpanShapeRenderer;
-import surfstore.SurfStoreBasic.Empty;
-import surfstore.SurfStoreBasic.SimpleAnswer;
-import surfstore.SurfStoreBasic.Block;
+//import sun.java2d.pipe.SpanShapeRenderer;
+import surfstore.SurfStoreBasic.*;
+import surfstore.SurfStoreBasic.Block.Builder;
 
 
 public final class BlockStore {
@@ -89,6 +91,13 @@ public final class BlockStore {
     }
 
     static class BlockStoreImpl extends BlockStoreGrpc.BlockStoreImplBase {
+        protected Map<String, byte[]> blockMap;
+
+        public BlockStoreImpl() {
+            super();
+            this.blockMap = new HashMap<>();
+        }
+
         @Override
         public void ping(Empty req, final StreamObserver<Empty> responseObserver) {
             Empty response = Empty.newBuilder().build();
@@ -101,6 +110,8 @@ public final class BlockStore {
         public void storeBlock(surfstore.SurfStoreBasic.Block request,
                                io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.Empty> responseObserver) {
 
+            blockMap.put(request.getHash(), request.getData().toByteArray());
+
             Empty response = Empty.newBuilder().build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
@@ -110,7 +121,12 @@ public final class BlockStore {
         public void getBlock(surfstore.SurfStoreBasic.Block request,
                              io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.Block> responseObserver) {
 
-            Block response = Block.newBuilder().build();
+            byte[] data = blockMap.get(request.getHash());
+            Builder builder = Block.newBuilder();
+            builder.setData(ByteString.copyFrom(data));
+            builder.setHash(request.getHash());
+
+            Block response = builder.build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
         }
@@ -118,7 +134,10 @@ public final class BlockStore {
         @Override
         public void hasBlock(surfstore.SurfStoreBasic.Block request,
                              io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.SimpleAnswer> responseObserver) {
-            SimpleAnswer response = SimpleAnswer.newBuilder().setAnswer(false).build();
+
+            boolean answer = blockMap.containsKey(request.getHash());
+
+            SimpleAnswer response = SimpleAnswer.newBuilder().setAnswer(answer).build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
         }

@@ -44,6 +44,7 @@ public final class Client {
         blockChannel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
     }
 
+    // For testing block function
     private static Block stringToBlock(String s) {
         Builder builder = Block.newBuilder();
         try {
@@ -56,7 +57,12 @@ public final class Client {
 
         return builder.build();
     }
-    
+
+    private void ensure(boolean b){
+        if (!b) {
+            throw new RuntimeException("Assertion failed!");
+        }
+    }
 	private void go() {
 		metadataStub.ping(Empty.newBuilder().build());
         logger.info("Successfully pinged the Metadata server");
@@ -65,7 +71,23 @@ public final class Client {
         logger.info("Successfully pinged the Blockstore server");
         
         // TODO: Implement your client here
-        Block b1 =
+        Block b1 = stringToBlock("block_01");
+        Block b2 = stringToBlock("block_02");
+
+        ensure(blockStub.hasBlock(b1).getAnswer() == false);
+        ensure(blockStub.hasBlock(b2).getAnswer() == false);
+
+        blockStub.storeBlock(b1);
+        ensure(blockStub.hasBlock(b1).getAnswer() == true);
+
+        blockStub.storeBlock(b2);
+        ensure(blockStub.hasBlock(b2).getAnswer() == true);
+
+        Block b1Prime = blockStub.getBlock(b1);
+        ensure(b1Prime.getHash().equals(b1.getHash()));
+        ensure(b1Prime.getData().equals(b1.getData()));
+
+        logger.info("Tests passed");
 	}
 
 	/*
