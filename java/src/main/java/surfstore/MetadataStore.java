@@ -29,9 +29,9 @@ public final class MetadataStore {
     	this.config = config;
 	}
 
-	private void start(int port, int numThreads) throws IOException {
+	private void start(int port, int numThreads, boolean isLeader) throws IOException {
         server = ServerBuilder.forPort(port)
-                .addService(new MetadataStoreImpl(this.config.blockPort))
+                .addService(new MetadataStoreImpl(this.config.blockPort, isLeader))
                 .executor(Executors.newFixedThreadPool(numThreads))
                 .build()
                 .start();
@@ -91,22 +91,27 @@ public final class MetadataStore {
         }
 
         final MetadataStore server = new MetadataStore(config);
-        server.start(config.getMetadataPort(c_args.getInt("number")), c_args.getInt("threads"));
+        server.start(config.getMetadataPort(c_args.getInt("number")), c_args.getInt("threads"),
+                config.getLeaderNum() == c_args.getInt("number"));
         server.blockUntilShutdown();
     }
 
     static class MetadataStoreImpl extends MetadataStoreGrpc.MetadataStoreImplBase {
 
-        protected Map<String, Integer> file_versionMap;
-        protected Map<String, List<String>> file_blocklistMap;
+        Map<String, Integer> file_versionMap;
+        Map<String, List<String>> file_blocklistMap;
+        private final boolean leader;
         private final BlockStoreGrpc.BlockStoreBlockingStub blockStub;
+        private boolean crashed;
 
-        MetadataStoreImpl(int blockPort){
+        MetadataStoreImpl(int blockPort, boolean isLeader){
             super();
             blockStub=BlockStoreGrpc.newBlockingStub(ManagedChannelBuilder.forAddress("127.0.0.1", blockPort)
                     .usePlaintext(true).build());
             file_versionMap=new HashMap<>();
             file_blocklistMap=new HashMap<>();
+            this.leader = isLeader;
+            this.crashed = false;
         }
 
         @Override
@@ -159,23 +164,9 @@ public final class MetadataStore {
         public void modifyFile(surfstore.SurfStoreBasic.FileInfo request,
                                io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.WriteResult> responseObserver){
             WriteResult.Builder builder=WriteResult.newBuilder();
-//            //file never exist
-//            if(!file_versionMap.containsKey(request.getFilename())){
-//                try {
-//                    throw new Exception("file not exist");
-//                } catch (Exception e) {
-//                    e.printStackTrace();
-//                }
-//            }
-            //version wrong
 
-            int version;
-            if(file_versionMap.containsKey(request.getFilename())) {
-                version = file_versionMap.get(request.getFilename());
-            }
-            else {
-                version = 0;
-            }
+            //version wrong
+            int version = file_versionMap.getOrDefault(request.getFilename(), 0);
             builder.setCurrentVersion(version);
             if(request.getVersion() != version+1)
                 builder.setResultValue(1);
@@ -248,7 +239,47 @@ public final class MetadataStore {
         @Override
         public void isLeader(surfstore.SurfStoreBasic.Empty request,
                              io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.SimpleAnswer> responseObserver) {
+            SimpleAnswer response = SimpleAnswer.newBuilder().setAnswer(this.leader).build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        }
 
+        @Override
+        public void crash(surfstore.SurfStoreBasic.Empty request,
+                          io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.Empty> responseObserver) {
+            if(!this.leader)
+                throw new RuntimeException("crash on leader machine");
+            this.crashed = true;
+            Empty response = Empty.newBuilder().build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        }
+
+        @Override
+        public void restore(surfstore.SurfStoreBasic.Empty request,
+                            io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.Empty> responseObserver) {
+            if(!this.leader)
+                this.crashed = false;
+            Empty response = Empty.newBuilder().build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        }
+
+        @Override
+        public void isCrashed(surfstore.SurfStoreBasic.Empty request,
+                              io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.SimpleAnswer> responseObserver) {
+            SimpleAnswer response = SimpleAnswer.newBuilder().setAnswer(this.crashed).build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        }
+
+        @Override
+        public void getVersion(surfstore.SurfStoreBasic.FileInfo request,
+                               io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.FileInfo> responseObserver) {
+            FileInfo.Builder builder = FileInfo.newBuilder();
+            builder.setVersion(file_versionMap.getOrDefault(request.getFilename(), 0));
+            responseObserver.onNext(builder.build());
+            responseObserver.onCompleted();
         }
     }
 }
