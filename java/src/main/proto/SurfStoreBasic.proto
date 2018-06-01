@@ -69,6 +69,16 @@ service MetadataStore {
 
     // YOU CAN INSERT ADDITIONAL RPC CALLS HERE TO IMPLEMENT PART 2
     // OF THE PROJECT, BUT PLEASE DON'T MODIFY THE ABOVE CALLS/ARGUMENTS
+
+    //2 phase commit, first log the fileinfo to follower. If succuss, follower
+    //should simply return true; otherwise false.
+    rpc Log(FileInfo) returns (SimpleAnswer) {}
+
+    //2phase commit, after leader tells ok to client, commit this log.
+    rpc Commit(Index) returns (Index) {}
+
+    //followers request update
+    rpc Update(Empty) returns (Empty) {}
 }
 
 service BlockStore {
@@ -127,4 +137,8 @@ message SimpleAnswer {
 
 message NodeList {
     repeated int32 nodelist = 1;
+}
+
+message Index {
+    int32 index = 1;
 }

@@ -58,7 +58,7 @@ public final class Client {
         fileinfo_builder.setFilename(fileName);
         FileInfo readfile_res=metadataStub.readFile(fileinfo_builder.build());
         if(readfile_res.getVersion() == 0||
-                (readfile_res.getBlocklistList().size() == 1&&readfile_res.getBlocklist(0).equals("0"))){
+                (readfile_res.getBlocklistCount() == 1&&readfile_res.getBlocklist(0).equals("0"))){
             throw new NoSuchFileException(fileName);
         }
         List<String> missing_hashes=new ArrayList<>();
@@ -123,7 +123,7 @@ public final class Client {
         FileInfo.Builder fileinfo_builder=FileInfo.newBuilder();
         fileinfo_builder.setFilename(path);
         FileInfo readfile_res=metadataStub.readFile(fileinfo_builder.build());
-        if((readfile_res.getBlocklistList().size() == 1&&
+        if((readfile_res.getBlocklistCount() == 1&&
                 readfile_res.getBlocklist(0).equals("0"))||
                 readfile_res.getVersion() == 0)
             throw new NoSuchFileException(path);
@@ -142,24 +142,25 @@ public final class Client {
 
 
     // For testing block function
-    private static Block stringToBlock(String s) {
-        Builder builder = Block.newBuilder();
-        try {
-            builder.setData(ByteString.copyFrom(s, "UTF-8"));
-        } catch (UnsupportedEncodingException e){
-            throw new RuntimeException(e);
-        }
-
-        //builder.setHash(HashUtils.sha256(s));
-
-        return builder.build();
-    }
+//    private static Block stringToBlock(String s) {
+//        Builder builder = Block.newBuilder();
+//        try {
+//            builder.setData(ByteString.copyFrom(s, "UTF-8"));
+//        } catch (UnsupportedEncodingException e){
+//            throw new RuntimeException(e);
+//        }
+//
+//        //builder.setHash(HashUtils.sha256(s));
+//
+//        return builder.build();
+//    }
 
     private void ensure(boolean b){
         if (!b) {
             throw new RuntimeException("Assertion failed!");
         }
     }
+
 	private void go(String operation, String filePath, String downPath) {
 		metadataStub.ping(Empty.newBuilder().build());
         logger.info("Successfully pinged the Metadata server");

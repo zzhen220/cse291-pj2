@@ -29,9 +29,16 @@ public final class MetadataStore {
     	this.config = config;
 	}
 
-	private void start(int port, int numThreads, boolean isLeader) throws IOException {
+	private void start(int port, int numThreads, int leader) throws IOException {
+        MetadataStoreImpl mds;
+        if(config.getLeaderNum() == leader) {
+            this.config.metadataPorts.remove(leader);
+            mds = new MetadataStoreImpl(this.config.blockPort, this.config.metadataPorts);
+        } else {
+            mds = new MetadataStoreImpl(this.config.blockPort, this.config.metadataPorts.get(leader));
+        }
         server = ServerBuilder.forPort(port)
-                .addService(new MetadataStoreImpl(this.config.blockPort, isLeader))
+                .addService(mds)
                 .executor(Executors.newFixedThreadPool(numThreads))
                 .build()
                 .start();
@@ -92,7 +99,7 @@ public final class MetadataStore {
 
         final MetadataStore server = new MetadataStore(config);
         server.start(config.getMetadataPort(c_args.getInt("number")), c_args.getInt("threads"),
-                config.getLeaderNum() == c_args.getInt("number"));
+                c_args.getInt("number"));
         server.blockUntilShutdown();
     }
 
@@ -100,18 +107,44 @@ public final class MetadataStore {
 
         Map<String, Integer> file_versionMap;
         Map<String, List<String>> file_blocklistMap;
-        private final boolean leader;
+        List<FileInfo> logList;
+        private final boolean isLeader;
         private final BlockStoreGrpc.BlockStoreBlockingStub blockStub;
+        private List<MetadataStoreGrpc.MetadataStoreBlockingStub> followers;
+        private MetadataStoreGrpc.MetadataStoreBlockingStub leader;
         private boolean crashed;
+        private int commitedIndex;
 
-        MetadataStoreImpl(int blockPort, boolean isLeader){
+        MetadataStoreImpl(int blockPort, int leaderPort){
             super();
             blockStub=BlockStoreGrpc.newBlockingStub(ManagedChannelBuilder.forAddress("127.0.0.1", blockPort)
                     .usePlaintext(true).build());
+            leader = MetadataStoreGrpc.newBlockingStub(ManagedChannelBuilder.forAddress("127.0.0.1", leaderPort)
+                    .usePlaintext(true).build());
             file_versionMap=new HashMap<>();
             file_blocklistMap=new HashMap<>();
-            this.leader = isLeader;
+            logList = new ArrayList<>();
+            this.isLeader = false;
             this.crashed = false;
+            followers = null;
+        }
+
+        MetadataStoreImpl(int blockPort, Map<Integer, Integer> mdsPort){
+            super();
+            blockStub=BlockStoreGrpc.newBlockingStub(ManagedChannelBuilder.forAddress("127.0.0.1", blockPort)
+                    .usePlaintext(true).build());
+
+            file_versionMap=new HashMap<>();
+            file_blocklistMap=new HashMap<>();
+            logList = new ArrayList<>();
+            this.isLeader = true;
+            this.crashed = false;
+            followers = new ArrayList<>();
+
+            for(Integer port: mdsPort.values()){
+                followers.add(MetadataStoreGrpc.newBlockingStub(ManagedChannelBuilder.forAddress("127.0.0.1", port)
+                        .usePlaintext(true).build()));
+            }
         }
 
         @Override
@@ -133,6 +166,7 @@ public final class MetadataStore {
                              io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.FileInfo> responseObserver) {
             FileInfo.Builder builder=FileInfo.newBuilder();
 
+            builder.setFilename(request.getFilename());
             logger.info("file name: " + request.getFilename());
             //file never exist
             if(!file_versionMap.containsKey(request.getFilename())){
@@ -165,34 +199,50 @@ public final class MetadataStore {
                                io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.WriteResult> responseObserver){
             WriteResult.Builder builder=WriteResult.newBuilder();
 
-            //version wrong
-            int version = file_versionMap.getOrDefault(request.getFilename(), 0);
-            builder.setCurrentVersion(version);
-            if(request.getVersion() != version+1)
-                builder.setResultValue(1);
+            if(!isLeader)
+                builder.setResultValue(3);
             else {
-                List<String> missing_block=new ArrayList<>();
-                for(int i=0;i<request.getBlocklistList().size();i++){
-                    String hash=request.getBlocklist(i);
-                    Block block_checking=Block.newBuilder().setHash(hash).build();
-                    SimpleAnswer ans=blockStub.hasBlock(block_checking);
-                    if(!ans.getAnswer()){
-                        missing_block.add(hash);
+                //version wrong
+                int version = file_versionMap.getOrDefault(request.getFilename(), 0);
+                builder.setCurrentVersion(version);
+                if(request.getVersion() != version+1)
+                    builder.setResultValue(1);
+                else {
+                    List<String> missing_block=new ArrayList<>();
+                    for(int i=0;i<request.getBlocklistList().size();i++){
+                        String hash=request.getBlocklist(i);
+                        Block block_checking=Block.newBuilder().setHash(hash).build();
+                        SimpleAnswer ans=blockStub.hasBlock(block_checking);
+                        if(!ans.getAnswer()){
+                            missing_block.add(hash);
+                        }
                     }
-                }
 
-                //missing block
-                if(missing_block.size()!=0){
-                    builder.setResultValue(2);
-                    builder.addAllMissingBlocks(missing_block);
-                }
-                else{
-                    //ok
-                    logger.info("Metadata store modification successful. New version number is" + request.getVersion());
-                    builder.setResultValue(0);
-                    builder.setCurrentVersion(request.getVersion());
-                    file_versionMap.put(request.getFilename(),request.getVersion());
-                    file_blocklistMap.put(request.getFilename(),request.getBlocklistList());
+                    //missing block
+                    if(missing_block.size()!=0){
+                        builder.setResultValue(2);
+                        builder.addAllMissingBlocks(missing_block);
+                    }
+                    else{
+                        //ok
+                        logList.add(FileInfo.newBuilder(request).build());
+                        int vote = 0;
+                        for(MetadataStoreGrpc.MetadataStoreBlockingStub follower:followers){
+                            if(follower.log(FileInfo.newBuilder(request).build()).getAnswer())
+                                vote++;
+                        }
+                        if(vote >= followers.size()/2) {
+                            builder.setResultValue(0);
+                            builder.setCurrentVersion(request.getVersion());
+                            file_versionMap.put(request.getFilename(), request.getVersion());
+                            file_blocklistMap.put(request.getFilename(), request.getBlocklistList());
+                            commitedIndex = logList.size();
+                            logger.info("Metadata store modification successful. New version number is: " + request.getVersion());
+                            for(MetadataStoreGrpc.MetadataStoreBlockingStub follower:followers){
+                                follower.commit(Index.newBuilder().setIndex(logList.size()).build());
+                            }
+                        }
+                    }
                 }
             }
 
@@ -210,21 +260,40 @@ public final class MetadataStore {
         public void deleteFile(surfstore.SurfStoreBasic.FileInfo request,
                                io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.WriteResult> responseObserver){
             WriteResult.Builder builder=WriteResult.newBuilder();
-            //version wrong
-            if(file_versionMap.containsKey(request.getFilename())) {
-                int version = file_versionMap.get(request.getFilename());
-                builder.setCurrentVersion(version);
-                if (request.getVersion() != version + 1)
-                    builder.setResultValue(1);
-                else {
-                    builder.setResultValue(0);
-                    builder.setCurrentVersion(request.getVersion());
-                    file_versionMap.put(request.getFilename(),request.getVersion());
-                    List<String> temp=new ArrayList<>();
-                    temp.add("0");
-                    file_blocklistMap.put(request.getFilename(),temp);
+
+            if(!isLeader){
+                builder.setResultValue(3);
+            } else {
+                //version wrong
+                if(file_versionMap.containsKey(request.getFilename())) {
+                    int version = file_versionMap.get(request.getFilename());
+                    builder.setCurrentVersion(version);
+                    if (request.getVersion() != version + 1)
+                        builder.setResultValue(1);
+                    else {
+                        //2PC
+                        List<String> temp=new ArrayList<>();
+                        temp.add("0");
+                        logList.add(FileInfo.newBuilder(request).addAllBlocklist(temp).build());
+                        int vote = 0;
+                        for(MetadataStoreGrpc.MetadataStoreBlockingStub follower:followers){
+                            if(follower.log(FileInfo.newBuilder(request).build()).getAnswer())
+                                vote++;
+                        }
+                        if(vote >= followers.size()/2){
+                            builder.setResultValue(0);
+                            builder.setCurrentVersion(request.getVersion());
+                            file_versionMap.put(request.getFilename(),request.getVersion());
+                            file_blocklistMap.put(request.getFilename(),temp);
+                            commitedIndex = logList.size();
+                            for(MetadataStoreGrpc.MetadataStoreBlockingStub follower:followers){
+                                follower.commit(Index.newBuilder().setIndex(logList.size()).build());
+                            }
+                        }
+                    }
                 }
             }
+
 
             WriteResult response=builder.build();
             responseObserver.onNext(response);
@@ -239,7 +308,7 @@ public final class MetadataStore {
         @Override
         public void isLeader(surfstore.SurfStoreBasic.Empty request,
                              io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.SimpleAnswer> responseObserver) {
-            SimpleAnswer response = SimpleAnswer.newBuilder().setAnswer(this.leader).build();
+            SimpleAnswer response = SimpleAnswer.newBuilder().setAnswer(this.isLeader).build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
         }
@@ -247,7 +316,7 @@ public final class MetadataStore {
         @Override
         public void crash(surfstore.SurfStoreBasic.Empty request,
                           io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.Empty> responseObserver) {
-            if(!this.leader)
+            if(!this.isLeader)
                 throw new RuntimeException("crash on leader machine");
             this.crashed = true;
             Empty response = Empty.newBuilder().build();
@@ -258,8 +327,9 @@ public final class MetadataStore {
         @Override
         public void restore(surfstore.SurfStoreBasic.Empty request,
                             io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.Empty> responseObserver) {
-            if(!this.leader)
+            if(!this.isLeader) {
                 this.crashed = false;
+            }
             Empty response = Empty.newBuilder().build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
@@ -279,6 +349,59 @@ public final class MetadataStore {
             FileInfo.Builder builder = FileInfo.newBuilder();
             builder.setVersion(file_versionMap.getOrDefault(request.getFilename(), 0));
             responseObserver.onNext(builder.build());
+            responseObserver.onCompleted();
+        }
+
+        @Override
+        public void log(surfstore.SurfStoreBasic.FileInfo request,
+                        io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.SimpleAnswer> responseObserver) {
+            SimpleAnswer.Builder builder = SimpleAnswer.newBuilder();
+            if(crashed){
+                builder.setAnswer(false);
+            } else {
+                logList.add(FileInfo.newBuilder(request).build());
+                builder.setAnswer(true);
+            }
+            responseObserver.onNext(builder.build());
+            responseObserver.onCompleted();
+        }
+
+        @Override
+        public void commit(surfstore.SurfStoreBasic.Index request,
+                           io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.Index> responseObserver) {
+            Index.Builder builder = Index.newBuilder();
+            if(logList.size() == request.getIndex()){
+                for(int i = commitedIndex; i < logList.size(); i++){
+                    FileInfo fi = logList.get(i);
+                    file_versionMap.put(fi.getFilename(), fi.getVersion());
+                    file_blocklistMap.put(fi.getFilename(), fi.getBlocklistList());
+                }
+                commitedIndex = request.getIndex();
+            }
+            builder.setIndex(commitedIndex);
+            responseObserver.onNext(builder.build());
+            responseObserver.onCompleted();
+        }
+
+        @Override
+        public void update(surfstore.SurfStoreBasic.Empty request,
+                           io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.Empty> responseObserver) {
+            Index index = Index.newBuilder().setIndex(commitedIndex).build();
+            for(MetadataStoreGrpc.MetadataStoreBlockingStub follower: followers){
+                if(follower.isCrashed(Empty.newBuilder().build()).getAnswer()){
+                    break;
+                }
+                int committedIndex = follower.commit(index).getIndex();
+                while (committedIndex < this.commitedIndex){
+                    for(int i = committedIndex; i < logList.size(); i++){
+                        follower.log(logList.get(i));
+                    }
+                    committedIndex = follower.commit(index).getIndex();
+                }
+            }
+
+            Empty response = Empty.newBuilder().build();
+            responseObserver.onNext(response);
             responseObserver.onCompleted();
         }
     }
