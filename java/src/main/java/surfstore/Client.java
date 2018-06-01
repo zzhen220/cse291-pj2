@@ -1,9 +1,8 @@
 package surfstore;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.OutputStream;
-import java.io.UnsupportedEncodingException;
+import java.io.*;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -54,12 +53,13 @@ public final class Client {
         blockChannel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
     }
 
-    public void download(String filePath, String downPath) throws Exception{
+    public void download(String fileName, String downPath) throws NoSuchFileException{
         FileInfo.Builder fileinfo_builder=FileInfo.newBuilder();
-        fileinfo_builder.setFilename(filePath);
+        fileinfo_builder.setFilename(fileName);
         FileInfo readfile_res=metadataStub.readFile(fileinfo_builder.build());
-        if(readfile_res.getBlocklistList()==null||readfile_res.getBlocklistList().size() == 1){
-            throw new Exception("no file to download");
+        if(readfile_res.getVersion() == 0||
+                (readfile_res.getBlocklistList().size() == 1&&readfile_res.getBlocklist(0).equals("0"))){
+            throw new NoSuchFileException(fileName);
         }
         List<String> missing_hashes=new ArrayList<>();
         List<String> all_hashes=readfile_res.getBlocklistList();
@@ -79,56 +79,60 @@ public final class Client {
         }
 
         //Write file to disk
-        File f = new File(downPath);
+        File f = new File(downPath+"/"+fileName);
         OutputStream os = null;
-        os = new FileOutputStream(f);
-        for(String s : all_hashes) {
-            os.write(hash_to_data.get(s));
+        try {
+            os = new FileOutputStream(f);
+            for(String s : all_hashes) {
+                os.write(hash_to_data.get(s));
+            }
+            os.close();
+        } catch (Exception e) {
+            e.printStackTrace();
         }
-        os.close();
     }
 
-    public void upLoad(String path) throws Exception{
+    public void upLoad(String path) throws IOException{
         List<String> hash_list=HashUtils.compute_hashlist(path, hash_to_data);
         FileInfo.Builder fileinfo_builder=FileInfo.newBuilder();
-        fileinfo_builder.setFilename(path);
+        fileinfo_builder.setFilename(Paths.get(path).getFileName().toString());
         FileInfo readfile_res=metadataStub.readFile(fileinfo_builder.build());
         fileinfo_builder.setVersion(readfile_res.getVersion()+1);
         fileinfo_builder.addAllBlocklist(hash_list);
         WriteResult modify_res=metadataStub.modifyFile(fileinfo_builder.build());
-        //ok
-        if(modify_res.getResultValue()==0){
-            //Securely return
-            return;
-        }
-        //old version
-        else if(modify_res.getResultValue()==1){
-            throw new Exception("old version given");
-        }
-        //missing blocks
-        else if(modify_res.getResultValue()==2){
-            List<String> missing_blocks=modify_res.getMissingBlocksList();
-            for(int i=0;i<missing_blocks.size();i++){
-                Block.Builder block_builder=Block.newBuilder();
-                block_builder.setHash(missing_blocks.get(i)); //get missing block hashlist
-                block_builder.setData(ByteString.copyFrom(hash_to_data.get(missing_blocks.get(i)))); //get missing block data
-                blockStub.storeBlock(block_builder.build());
+
+        while (modify_res.getResultValue() != 0){
+            if(modify_res.getResultValue() == 1){
+                fileinfo_builder.setVersion(modify_res.getCurrentVersion()+1);
+            } else if(modify_res.getResultValue()==2){
+                List<String> missing_blocks=modify_res.getMissingBlocksList();
+                for(int i=0;i<missing_blocks.size();i++){
+                    Block.Builder block_builder=Block.newBuilder();
+                    block_builder.setHash(missing_blocks.get(i)); //get missing block hashlist
+                    block_builder.setData(ByteString.copyFrom(hash_to_data.get(missing_blocks.get(i)))); //get missing block data
+                    blockStub.storeBlock(block_builder.build());
+                }
+                fileinfo_builder.setVersion(modify_res.getCurrentVersion()+1);
             }
-            if (metadataStub.modifyFile(fileinfo_builder.build()).getResultValue() != 0)
-                throw new Exception("Upload failed");
+            modify_res=metadataStub.modifyFile(fileinfo_builder.build());
         }
+
     }
 
-    public void delete(String path){
+    public void delete(String path) throws NoSuchFileException{
         FileInfo.Builder fileinfo_builder=FileInfo.newBuilder();
         fileinfo_builder.setFilename(path);
         FileInfo readfile_res=metadataStub.readFile(fileinfo_builder.build());
+        if((readfile_res.getBlocklistList().size() == 1&&
+                readfile_res.getBlocklist(0).equals("0"))||
+                readfile_res.getVersion() == 0)
+            throw new NoSuchFileException(path);
         fileinfo_builder.setVersion(readfile_res.getVersion()+1);
         WriteResult modify_res=metadataStub.deleteFile(fileinfo_builder.build());
         //do something else????
     }
 
-    public int getVersion(String path){
+    public int getVersion(String path) {
         FileInfo.Builder fileinfo_builder=FileInfo.newBuilder();
         fileinfo_builder.setFilename(path);
         FileInfo readfile_res=metadataStub.readFile(fileinfo_builder.build());
@@ -185,18 +189,25 @@ public final class Client {
             switch (operation) {
                 case "download":
                     download(filePath, downPath);
+                    System.out.println("OK");
+                    break;
                 case "upload":
                     upLoad(filePath);
+                    System.out.println("OK");
+                    break;
                 case "delete":
                     delete(filePath);
+                    System.out.println("OK");
+                    break;
                 case "getversion":
                     getVersion(filePath);
+                    break;
 
                 default:
                     return;
             }
-        } catch (Exception e) {
-            System.out.println(e.getMessage());
+        } catch (IOException e) {
+            System.out.println("Not Found");
         }
 
 	}

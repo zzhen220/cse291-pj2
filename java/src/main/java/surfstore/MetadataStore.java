@@ -2,9 +2,14 @@ package surfstore;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Map;
+import java.util.List;
+import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.concurrent.Executors;
 import java.util.logging.Logger;
 
+import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
@@ -12,7 +17,7 @@ import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
-import surfstore.SurfStoreBasic.Empty;
+import surfstore.SurfStoreBasic.*;
 
 public final class MetadataStore {
     private static final Logger logger = Logger.getLogger(MetadataStore.class.getName());
@@ -26,7 +31,7 @@ public final class MetadataStore {
 
 	private void start(int port, int numThreads) throws IOException {
         server = ServerBuilder.forPort(port)
-                .addService(new MetadataStoreImpl())
+                .addService(new MetadataStoreImpl(this.config.blockPort))
                 .executor(Executors.newFixedThreadPool(numThreads))
                 .build()
                 .start();
@@ -91,6 +96,19 @@ public final class MetadataStore {
     }
 
     static class MetadataStoreImpl extends MetadataStoreGrpc.MetadataStoreImplBase {
+
+        protected Map<String, Integer> file_versionMap;
+        protected Map<String, List<String>> file_blocklistMap;
+        private final BlockStoreGrpc.BlockStoreBlockingStub blockStub;
+
+        MetadataStoreImpl(int blockPort){
+            super();
+            blockStub=BlockStoreGrpc.newBlockingStub(ManagedChannelBuilder.forAddress("127.0.0.1", blockPort)
+                    .usePlaintext(true).build());
+            file_versionMap=new HashMap<>();
+            file_blocklistMap=new HashMap<>();
+        }
+
         @Override
         public void ping(Empty req, final StreamObserver<Empty> responseObserver) {
             Empty response = Empty.newBuilder().build();
@@ -99,5 +117,138 @@ public final class MetadataStore {
         }
 
         // TODO: Implement the other RPCs!
+
+        /**
+         *Read the requested file.
+         * @param request Client supply filename of FileInfo
+         * @param responseObserver
+         */
+        @Override
+        public void readFile(surfstore.SurfStoreBasic.FileInfo request,
+                             io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.FileInfo> responseObserver) {
+            FileInfo.Builder builder=FileInfo.newBuilder();
+
+            logger.info("file name: " + request.getFilename());
+            //file never exist
+            if(!file_versionMap.containsKey(request.getFilename())){
+                builder.setVersion(0);
+            }
+            //file has been deleted
+            else if(file_blocklistMap.containsKey(request.getFilename())&&
+                    file_blocklistMap.get(request.getFilename()).size()==1&&
+                    file_blocklistMap.get(request.getFilename()).get(0).equals("0")){
+                builder.setVersion(file_versionMap.get(request.getFilename()));
+                builder.addAllBlocklist(file_blocklistMap.get(request.getFilename()));
+            }
+            //file exist
+            else{
+                builder.setVersion(file_versionMap.get(request.getFilename()));
+                builder.addAllBlocklist(file_blocklistMap.get(request.getFilename()));
+            }
+            FileInfo response=builder.build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        }
+
+        /**
+         * Write a file
+         * @param request
+         * @param responseObserver
+         */
+        @Override
+        public void modifyFile(surfstore.SurfStoreBasic.FileInfo request,
+                               io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.WriteResult> responseObserver){
+            WriteResult.Builder builder=WriteResult.newBuilder();
+//            //file never exist
+//            if(!file_versionMap.containsKey(request.getFilename())){
+//                try {
+//                    throw new Exception("file not exist");
+//                } catch (Exception e) {
+//                    e.printStackTrace();
+//                }
+//            }
+            //version wrong
+
+            int version;
+            if(file_versionMap.containsKey(request.getFilename())) {
+                version = file_versionMap.get(request.getFilename());
+            }
+            else {
+                version = 0;
+            }
+            builder.setCurrentVersion(version);
+            if(request.getVersion() != version+1)
+                builder.setResultValue(1);
+            else {
+                List<String> missing_block=new ArrayList<>();
+                for(int i=0;i<request.getBlocklistList().size();i++){
+                    String hash=request.getBlocklist(i);
+                    Block block_checking=Block.newBuilder().setHash(hash).build();
+                    SimpleAnswer ans=blockStub.hasBlock(block_checking);
+                    if(!ans.getAnswer()){
+                        missing_block.add(hash);
+                    }
+                }
+
+                //missing block
+                if(missing_block.size()!=0){
+                    builder.setResultValue(2);
+                    builder.addAllMissingBlocks(missing_block);
+                }
+                else{
+                    //ok
+                    logger.info("Metadata store modification successful. New version number is" + request.getVersion());
+                    builder.setResultValue(0);
+                    builder.setCurrentVersion(request.getVersion());
+                    file_versionMap.put(request.getFilename(),request.getVersion());
+                    file_blocklistMap.put(request.getFilename(),request.getBlocklistList());
+                }
+            }
+
+            WriteResult response=builder.build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        }
+
+        /**
+         * Delete a file
+         * @param request
+         * @param responseObserver
+         */
+        @Override
+        public void deleteFile(surfstore.SurfStoreBasic.FileInfo request,
+                               io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.WriteResult> responseObserver){
+            WriteResult.Builder builder=WriteResult.newBuilder();
+            //version wrong
+            if(file_versionMap.containsKey(request.getFilename())) {
+                int version = file_versionMap.get(request.getFilename());
+                builder.setCurrentVersion(version);
+                if (request.getVersion() != version + 1)
+                    builder.setResultValue(1);
+                else {
+                    builder.setResultValue(0);
+                    builder.setCurrentVersion(request.getVersion());
+                    file_versionMap.put(request.getFilename(),request.getVersion());
+                    List<String> temp=new ArrayList<>();
+                    temp.add("0");
+                    file_blocklistMap.put(request.getFilename(),temp);
+                }
+            }
+
+            WriteResult response=builder.build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted(); //why don't we delete blocks in blockstore?
+        }
+
+        /**
+         * Query whether the MetadataStore server is currently the leader.
+         * @param request
+         * @param responseObserver
+         */
+        @Override
+        public void isLeader(surfstore.SurfStoreBasic.Empty request,
+                             io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.SimpleAnswer> responseObserver) {
+
+        }
     }
 }
