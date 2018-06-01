@@ -35,7 +35,7 @@ public final class MetadataStore {
             this.config.metadataPorts.remove(leader);
             mds = new MetadataStoreImpl(this.config.blockPort, this.config.metadataPorts);
         } else {
-            mds = new MetadataStoreImpl(this.config.blockPort, this.config.metadataPorts.get(leader));
+            mds = new MetadataStoreImpl(this.config.blockPort, this.config.metadataPorts.get(config.getLeaderNum()));
         }
         server = ServerBuilder.forPort(port)
                 .addService(mds)
@@ -329,6 +329,7 @@ public final class MetadataStore {
                             io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.Empty> responseObserver) {
             if(!this.isLeader) {
                 this.crashed = false;
+                this.leader.update(Empty.newBuilder().build());
             }
             Empty response = Empty.newBuilder().build();
             responseObserver.onNext(response);
@@ -347,6 +348,7 @@ public final class MetadataStore {
         public void getVersion(surfstore.SurfStoreBasic.FileInfo request,
                                io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.FileInfo> responseObserver) {
             FileInfo.Builder builder = FileInfo.newBuilder();
+            builder.setFilename(request.getFilename());
             builder.setVersion(file_versionMap.getOrDefault(request.getFilename(), 0));
             responseObserver.onNext(builder.build());
             responseObserver.onCompleted();
