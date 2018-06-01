@@ -316,7 +316,7 @@ public final class MetadataStore {
         @Override
         public void crash(surfstore.SurfStoreBasic.Empty request,
                           io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.Empty> responseObserver) {
-            if(!this.isLeader)
+            if(this.isLeader)
                 throw new RuntimeException("crash on leader machine");
             this.crashed = true;
             Empty response = Empty.newBuilder().build();
