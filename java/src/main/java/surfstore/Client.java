@@ -19,7 +19,6 @@ import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
 import surfstore.SurfStoreBasic.*;
-import surfstore.SurfStoreBasic.Block.Builder;
 
 
 public final class Client {
@@ -141,25 +140,7 @@ public final class Client {
     }
 
 
-    // For testing block function
-//    private static Block stringToBlock(String s) {
-//        Builder builder = Block.newBuilder();
-//        try {
-//            builder.setData(ByteString.copyFrom(s, "UTF-8"));
-//        } catch (UnsupportedEncodingException e){
-//            throw new RuntimeException(e);
-//        }
-//
-//        //builder.setHash(HashUtils.sha256(s));
-//
-//        return builder.build();
-//    }
 
-    private void ensure(boolean b){
-        if (!b) {
-            throw new RuntimeException("Assertion failed!");
-        }
-    }
 
 	private void go(String operation, String filePath, String downPath) {
 		metadataStub.ping(Empty.newBuilder().build());
@@ -167,25 +148,7 @@ public final class Client {
         
         blockStub.ping(Empty.newBuilder().build());
         logger.info("Successfully pinged the Blockstore server");
-        
-        // TODO: Implement your client here
-//        Block b1 = stringToBlock("block_01");
-//        Block b2 = stringToBlock("block_02");
-//
-//        ensure(blockStub.hasBlock(b1).getAnswer() == false);
-//        ensure(blockStub.hasBlock(b2).getAnswer() == false);
-//
-//        blockStub.storeBlock(b1);
-//        ensure(blockStub.hasBlock(b1).getAnswer() == true);
-//
-//        blockStub.storeBlock(b2);
-//        ensure(blockStub.hasBlock(b2).getAnswer() == true);
-//
-//        Block b1Prime = blockStub.getBlock(b1);
-//        ensure(b1Prime.getHash().equals(b1.getHash()));
-//        ensure(b1Prime.getData().equals(b1.getData()));
-//
-//        logger.info("Tests passed");
+
         try {
             switch (operation) {
                 case "download":
@@ -203,9 +166,6 @@ public final class Client {
                 case "getversion":
                     getVersion(filePath);
                     break;
-
-                default:
-                    return;
             }
         } catch (IOException e) {
             System.out.println("Not Found");
@@ -214,17 +174,19 @@ public final class Client {
 	}
 
 	/*
-	 * TODO: Add command line handling here
+	 *
 	 */
     private static Namespace parseArgs(String[] args) {
         ArgumentParser parser = ArgumentParsers.newFor("Client").build()
                 .description("Client for SurfStore");
         parser.addArgument("config_file").type(String.class)
                 .help("Path to configuration file");
-        parser.addArgument("operation").type(String.class)
-                .help("Operation of client");
-        parser.addArgument("filePath").type(String.class)
-                .help("Path to client target");
+        if(args.length > 1) {
+            parser.addArgument("operation").type(String.class)
+                    .help("Operation of client");
+            parser.addArgument("filePath").type(String.class)
+                    .help("Path to client target");
+        }
         if (args.length > 3)
             parser.addArgument("downloadDir").type(String.class)
                     .help("Directory of download location");
@@ -248,7 +210,7 @@ public final class Client {
         ConfigReader config = new ConfigReader(configf);
 
         Client client = new Client(config);
-        
+
         try {
         	client.go(c_args.getString("operation"), c_args.getString("filePath"), c_args.getString("downloadDir"));
         } finally {
@@ -256,4 +218,6 @@ public final class Client {
         }
     }
 
+
+    private MetadataStoreGrpc.MetadataStoreBlockingStub crashedFollower;
 }

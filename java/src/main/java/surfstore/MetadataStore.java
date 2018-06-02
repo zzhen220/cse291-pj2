@@ -154,7 +154,6 @@ public final class MetadataStore {
             responseObserver.onCompleted();
         }
 
-        // TODO: Implement the other RPCs!
 
         /**
          *Read the requested file.

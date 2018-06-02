@@ -104,7 +104,6 @@ public final class BlockStore {
             responseObserver.onCompleted();
         }
 
-        // TODO: Implement the other RPCs!
         @Override
         public void storeBlock(surfstore.SurfStoreBasic.Block request,
                                io.grpc.stub.StreamObserver<surfstore.SurfStoreBasic.Empty> responseObserver) {
