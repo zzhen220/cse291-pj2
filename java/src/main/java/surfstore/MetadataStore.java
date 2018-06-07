@@ -390,7 +390,7 @@ public final class MetadataStore {
             Index index = Index.newBuilder().setIndex(commitedIndex).build();
             for(MetadataStoreGrpc.MetadataStoreBlockingStub follower: followers){
                 if(follower.isCrashed(Empty.newBuilder().build()).getAnswer()){
-                    break;
+                    continue;
                 }
                 int committedIndex = follower.commit(index).getIndex();
                 while (committedIndex < this.commitedIndex){
